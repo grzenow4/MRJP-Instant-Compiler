@@ -2,7 +2,7 @@ module JVMCompiler where
 
 import Control.Monad.State
 import qualified Data.Map as Map
-import System.FilePath.Posix (takeBaseName)
+import Data.Text.Lazy.Builder
 
 import Instant.AbsInstant
 
@@ -45,10 +45,10 @@ getLoc x = do
         Just l -> return l
         Nothing -> error $ "Variable " ++ x ++ " does not exist."
 
-returnFmt :: String -> CM String
-returnFmt s = return $ "    " ++ s ++ "\n"
+returnFmt :: String -> CM Builder
+returnFmt s = return . fromString $ "    " ++ s ++ "\n"
 
-jvmInstr :: Instr -> CM String
+jvmInstr :: Instr -> CM Builder
 jvmInstr PrintStream = returnFmt $ "getstatic java/lang/System/out Ljava/io/PrintStream;\n" ++
                                    "    swap\n" ++
                                    "    invokevirtual java/io/PrintStream/println(I)V"
@@ -68,25 +68,25 @@ jvmInstr (ILoad l)
     | l <= 3         = returnFmt $ "iload_" ++ show l
     | otherwise      = returnFmt $ "iload " ++ show l
 
-compilePrg :: [Stmt] -> CM (Int, String)
+compilePrg :: [Stmt] -> CM (Int, Builder)
 compilePrg ss = do
     program <- mapM compileStmt ss
     let stackSize = if program == [] then 0 else maximum $ map fst program
-    let code = concat $ map snd program
+    let code = mconcat $ map snd program
     return (stackSize, code)
 
-compileStmt :: Stmt -> CM (Int, String)
+compileStmt :: Stmt -> CM (Int, Builder)
 compileStmt (SAss x e) = do
     (stack, code1) <- compileExp e
     l <- writeLoc (takeStr x)
     code2 <- jvmInstr (IStore l)
-    return (stack, code1 ++ code2)
+    return (stack, code1 <> code2)
 compileStmt (SExp e) = do
     (stack, code1) <- compileExp e
     code2 <- jvmInstr PrintStream
-    return (max stack 2, code1 ++ code2)
+    return (max stack 2, code1 <> code2)
 
-compileExp :: Exp -> CM (Int, String)
+compileExp :: Exp -> CM (Int, Builder)
 compileExp (ExpLit n)
     | n == -1                   = jvmInstr (IConstM1) >>= \code -> return (1, code)
     | n >= 0 && n <= 5          = jvmInstr (IConst n) >>= \code -> return (1, code)
@@ -102,8 +102,8 @@ compileExp (ExpAdd e1 e2) = do
     code3 <- jvmInstr IAdd
     let stack = computeStackSize stack1 stack2
     let code = if stack1 < stack2
-               then code2 ++ code1 ++ code3
-               else code1 ++ code2 ++ code3
+               then code2 <> code1 <> code3
+               else code1 <> code2 <> code3
     return (stack, code)
 compileExp (ExpSub e1 e2) = do
     (stack1, code1) <- compileExp e1
@@ -112,8 +112,8 @@ compileExp (ExpSub e1 e2) = do
     swap <- returnFmt "swap"
     let stack = computeStackSize stack1 stack2
     let code = if stack1 < stack2
-               then code2 ++ code1 ++ swap ++ code3
-               else code1 ++ code2 ++ code3
+               then code2 <> code1 <> swap <> code3
+               else code1 <> code2 <> code3
     return (stack, code)
 compileExp (ExpMul e1 e2) = do
     (stack1, code1) <- compileExp e1
@@ -121,8 +121,8 @@ compileExp (ExpMul e1 e2) = do
     code3 <- jvmInstr IMul
     let stack = computeStackSize stack1 stack2
     let code = if stack1 < stack2
-               then code2 ++ code1 ++ code3
-               else code1 ++ code2 ++ code3
+               then code2 <> code1 <> code3
+               else code1 <> code2 <> code3
     return (stack, code)
 compileExp (ExpDiv e1 e2) = do
     (stack1, code1) <- compileExp e1
@@ -131,25 +131,26 @@ compileExp (ExpDiv e1 e2) = do
     swap <- returnFmt "swap"
     let stack = computeStackSize stack1 stack2
     let code = if stack1 < stack2
-               then code2 ++ code1 ++ swap ++ code3
-               else code1 ++ code2 ++ code3
+               then code2 <> code1 <> swap <> code3
+               else code1 <> code2 <> code3
     return (stack, code)
 
-compile :: Program -> String -> IO String
-compile (Prog stmts) filename = do
+compile :: Program -> String -> IO Builder
+compile (Prog stmts) className = do
     ((stackSize, code), env) <- runStateT (compilePrg stmts) initEnv
     let locals = max 1 (Map.size env)
-    let className = takeBaseName filename
-    return $ ".class public " ++ className ++ "\n" ++
-             ".super java/lang/Object\n\n" ++
-             ".method public <init>()V\n" ++
-             "    aload_0\n" ++
-             "    invokespecial java/lang/Object/<init>()V\n" ++
-             "    return\n" ++
-             ".end method\n\n" ++
-             ".method public static main([Ljava/lang/String;)V\n" ++
-             ".limit stack " ++ show stackSize ++ "\n" ++
-             ".limit locals " ++ show locals ++ "\n" ++
-             code ++
-             "    return\n" ++
-             ".end method\n"
+    return $ mconcat
+        [ fromString $ ".class public " ++ className ++ "\n"
+        , fromString ".super java/lang/Object\n\n"
+        , fromString ".method public <init>()V\n"
+        , fromString "    aload_0\n"
+        , fromString "    invokespecial java/lang/Object/<init>()V\n"
+        , fromString "    return\n"
+        , fromString ".end method\n\n"
+        , fromString ".method public static main([Ljava/lang/String;)V\n"
+        , fromString $ ".limit stack " ++ show stackSize ++ "\n"
+        , fromString $ ".limit locals " ++ show locals ++ "\n"
+        , code
+        , fromString "    return\n"
+        , fromString ".end method\n"
+        ]

@@ -1,17 +1,19 @@
 module Main where
 
-import System.Environment
-import System.FilePath
-import System.Process
+import Data.Text.Lazy.Builder
+import Data.Text.Lazy.IO as T (writeFile)
+import System.Environment (getArgs)
+import System.FilePath (replaceExtension)
+import System.Process (system)
 
 import Instant.ParInstant
 
 import LLVMCompiler (compile)
 
-run :: String -> String -> IO String
-run filename s = case pProgram (myLexer s) of
-    Left e -> return $ "Parsing error\n" ++ e
-    Right parsed -> compile parsed filename
+run :: String -> IO Builder
+run s = case pProgram (myLexer s) of
+    Left e -> error $ "Parsing error\n" ++ e
+    Right parsed -> compile parsed
 
 main :: IO ()
 main = do
@@ -19,8 +21,8 @@ main = do
     case args of
         fs -> mapM_ (\file -> do
             content <- readFile file
-            output <- run (dropExtension file) content
+            output <- run content
             let outputFile = replaceExtension file ".ll"
             let outputFile2 = replaceExtension file ".bc"
-            writeFile outputFile output
+            T.writeFile outputFile (toLazyText output)
             system $ "llvm-link -o " ++ outputFile2 ++ " " ++ outputFile) fs
